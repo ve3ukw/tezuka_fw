@@ -629,6 +629,9 @@ body {
 .gpio-dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
 .gpio-state { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--dim-2); flex-shrink: 0; }
 .gpio-pin.gpio-on .gpio-state { color: var(--ok); }
+.gpio-pin.gpio-input { cursor: default; }
+.gpio-pin.gpio-input:hover { border-color: var(--border-soft); }
+.gpio-dir { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--dim); border: 1px solid var(--border-soft); border-radius: 3px; padding: 0 4px; flex-shrink: 0; }
 
 /* ---- GPS page ---- */
 .gps-panel {

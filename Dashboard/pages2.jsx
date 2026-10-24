@@ -2506,22 +2506,27 @@ function describeGpioLed(name) {
 
 function GPIO({ d }) {
   const gpio = d.gpio || {};
-  // Numbered board LEDs (led0, led1, …) first in index order, then any
-  // named indicator LEDs (ptt, lnb_power, …) alphabetically.
+  // GPIO header lines (extio) carry state/gpio_info/<name> = "<in|out>,<pin>".
+  const info = d.gpioInfo || {};
+  // Numbered board LEDs (led0, led1, …) first in index order, then header
+  // lines in header-pin order, then any named indicator LEDs (ptt,
+  // lnb_power, …) alphabetically.
+  const rank = (n) => (/^led\d+:/i.test(n) ? 0 : info[n] ? 1 : 2);
   const pins = Object.keys(gpio).sort((a, b) => {
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
     const ma = /^led(\d+):/i.exec(a), mb = /^led(\d+):/i.exec(b);
     if (ma && mb) return +ma[1] - +mb[1];
-    if (ma) return -1;
-    if (mb) return 1;
+    if (info[a] && info[b]) return +info[a].pin - +info[b].pin;
     return a.localeCompare(b);
   });
+  const isInput = (pin) => info[pin] && info[pin].dir === 'in';
 
-  const toggle = (pin) => d.publish('gpio/' + pin, gpio[pin] ? '0' : '1');
+  const toggle = (pin) => { if (!isInput(pin)) d.publish('gpio/' + pin, gpio[pin] ? '0' : '1'); };
 
   return (
     <div className="page">
       <div className="grid-12">
-        <Card title="Board LEDs" sub={`/sys/class/leds · ${pins.length} LED${pins.length !== 1 ? 's' : ''} reported`} className="span-12">
+        <Card title="Board LEDs & GPIO" sub={`/sys/class/leds + GPIO header · ${pins.length} line${pins.length !== 1 ? 's' : ''} reported`} className="span-12">
           {pins.length === 0 ? (
             <div className="dim" style={{ padding: '12px 0', fontSize: 13 }}>No LED state received yet — waiting for <code>state/gpio/&lt;name&gt;</code> messages.</div>
           ) : (
@@ -2529,9 +2534,12 @@ function GPIO({ d }) {
               {pins.map((pin) => {
                 const on = gpio[pin];
                 const { label, color } = describeGpioLed(pin);
+                const input = isInput(pin);
+                const title = info[pin] ? `${pin} · header pin ${+info[pin].pin} · ${input ? 'input (read only)' : 'output'}` : pin;
                 return (
-                  <div key={pin} className={`gpio-pin ${on ? "gpio-on" : "gpio-off"}`} onClick={() => toggle(pin)} title={pin}>
+                  <div key={pin} className={`gpio-pin ${on ? "gpio-on" : "gpio-off"}${input ? " gpio-input" : ""}`} onClick={() => toggle(pin)} title={title}>
                     <span className="gpio-num">{label}</span>
+                    {input && <span className="gpio-dir">IN</span>}
                     <span className={`gpio-dot ${on ? "on" : ""}`} style={on && color ? { background: color, boxShadow: `0 0 6px ${color}` } : undefined} />
                     <span className="gpio-state">{on ? "ON" : "OFF"}</span>
                   </div>

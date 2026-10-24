@@ -666,13 +666,15 @@ const DOCS = {
         id: 'gpio',
         icon: 'circuit',
         title: 'GPIO',
-        desc: 'Toggle individual GPIO pins (gpiochip0). State received via state/gpio/<n>.',
+        desc: 'Board LEDs and GPIO header lines. State received via state/gpio/<name>; header lines also send state/gpio_info/<name> ("in" or "out", header pin).',
         groups: [
           {
             title: 'GPIO grid',
             rows: [
-              ['Pin tile', 'Shows GPIO number, a coloured dot (green = ON, dim = OFF), and state label.'],
-              ['Click', 'Toggles the pin — publishes cmd/gpio/<pin> (0 or 1).'],
+              ['Pin tile', 'Shows the LED or line name, a coloured dot (green = ON, dim = OFF), and state label. Hover for the header pin.'],
+              ['Click', 'Toggles an output — publishes cmd/gpio/<name> (0 or 1).'],
+              ['IN badge', 'Header line configured as an input: shows the level read from the pin, clicking does nothing.'],
+              ['Configuration', 'Header lines (PlutoSky R2 JP5) are set per pin in config.txt [EXTIO], or with the u-boot variables extio_pinNN = in|out|off,name,level.'],
             ],
           },
         ],
@@ -1397,13 +1399,15 @@ const DOCS = {
         id: 'gpio',
         icon: 'circuit',
         title: 'GPIO',
-        desc: 'Basculement des broches GPIO individuelles (gpiochip0). État reçu via state/gpio/<n>.',
+        desc: 'LED de la carte et lignes du connecteur GPIO. État reçu via state/gpio/<nom> ; les lignes du connecteur envoient aussi state/gpio_info/<nom> (« in » ou « out », broche du connecteur).',
         groups: [
           {
             title: 'Grille GPIO',
             rows: [
-              ['Tuile de broche', 'Affiche le numéro GPIO, un point coloré (vert = ON, terne = OFF) et l\'état.'],
-              ['Clic', 'Bascule la broche — publie cmd/gpio/<broche> (0 ou 1).'],
+              ['Tuile de broche', 'Affiche le nom de la LED ou de la ligne, un point coloré (vert = ON, terne = OFF) et l\'état. Survoler pour voir la broche du connecteur.'],
+              ['Clic', 'Bascule une sortie — publie cmd/gpio/<nom> (0 ou 1).'],
+              ['Badge IN', 'Ligne du connecteur configurée en entrée : affiche le niveau lu sur la broche, le clic est sans effet.'],
+              ['Configuration', 'Les lignes du connecteur (PlutoSky R2 JP5) se règlent broche par broche dans config.txt [EXTIO], ou avec les variables u-boot extio_pinNN = in|out|off,nom,niveau.'],
             ],
           },
         ],

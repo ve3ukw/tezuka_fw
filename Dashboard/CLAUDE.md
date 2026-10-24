@@ -95,6 +95,8 @@ The on-device backend is `api_controller.sh` (polling script, 2 s interval, `boa
 | `state/system/clkref/lock` | Reference lock (0/1) — real (`vctcxo_lock` reg `0x10` bit `[0]`) where the IP exists; else derived from `refclk_source` |
 | `state/system/clkref/frequency` | Nominal reference frequency in Hz implied by the selected mode (`10000000` for `10mhz`, `1` for `pps`) — not a measured value; this IP has no frequency register. `n/a` where the IP doesn't exist |
 | `state/system/clkref/correction` | Live 16-bit VCTCXO DAC setpoint (reg `0x08`); `n/a` where the IP doesn't exist |
+| `state/gpio/<name>` | Board LED (`/sys/class/leds/<name>`) or GPIO header line (`/usr/bin/extio`) level, `0`/`1` |
+| `state/gpio_info/<name>` | GPIO header lines only: `<in\|out>,<header pin>` (from the u-boot `extio_pinNN` settings) |
 
 **Command topics** (`cmd/…`):
 
@@ -110,6 +112,7 @@ The on-device backend is `api_controller.sh` (polling script, 2 s interval, `boa
 | `cmd/operator/name` | Set operator name |
 | `cmd/operator/callsign` | Set operator callsign (device reboot required) |
 | `cmd/operator/locator` | Set operator Maidenhead locator |
+| `cmd/gpio/<name>` | Set a board LED or GPIO header output (`0`/`1`); ignored for header inputs |
 | `cmd/system/clkref/source` | Select reference clock mode (`10mhz`/`pps`/`none`) — writes `vctcxo_lock` reg `0x0C` `dac_ref_sel`; no-op on boards without that IP (no auto-detect, must be selected explicitly) |
 
 All payloads are plain text strings (numbers as decimal, flags as `0`/`1`). Messages are published with the retain flag (`-r`) so late-connecting clients get the last value immediately.
