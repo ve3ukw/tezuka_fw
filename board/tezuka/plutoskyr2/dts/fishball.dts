@@ -33,6 +33,9 @@
 			gpios = <&gpio0 7 0>;
 			linux,default-trigger = "heartbeat";
 		};
+		/* The JP5 header lines (EMIO, gpio0 54 + EMIO bit) are not described here:
+		 * /usr/bin/extio configures them as named inputs or outputs from the
+		 * extio_pinNN settings (config.txt [EXTIO], see /etc/extio.conf). */
 	};
 
 	gpio_keys {

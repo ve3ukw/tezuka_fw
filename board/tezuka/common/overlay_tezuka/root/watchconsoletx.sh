@@ -4,6 +4,17 @@
 adphys="$(cat /sys/bus/iio/devices/iio:device0/name)"
 tx_power_save=$(fw_printenv -n tx_power_save)
 
+# PTT output: the "ptt" LED where the board's device tree has one, else a
+# GPIO header line named ptt (/usr/bin/extio, PlutoSky R2 JP5)
+ptt_set()
+{
+    if [ -e /sys/class/leds/ptt/brightness ]; then
+        echo $1 > /sys/class/leds/ptt/brightness
+    elif [ -x /usr/bin/extio ]; then
+        /usr/bin/extio set ptt $1 2>/dev/null
+    fi
+}
+
 
 ptton()
 {
@@ -54,8 +65,8 @@ ptton()
 
     #echo 1 > /sys/class/gpio/gpio906/value
     #gpioset  gpiochip0 80=1
-    echo 1 > /sys/class/leds/ptt/brightness
-    echo "$(date) watchconsoleTX PTT_ON" >> /tmp/lnb.txt    
+    ptt_set 1
+    echo "$(date) watchconsoleTX PTT_ON" >> /tmp/lnb.txt
 
 
 
@@ -112,7 +123,7 @@ pttoff()
     fi
     #echo 0 > /sys/class/gpio/gpio906/value
     #gpioset  gpiochip0 80=0
-    echo 0 > /sys/class/leds/ptt/brightness
+    ptt_set 0
     echo "$(date) watchconsoleTX PTT_OFF" >> /tmp/lnb.txt
 }
 

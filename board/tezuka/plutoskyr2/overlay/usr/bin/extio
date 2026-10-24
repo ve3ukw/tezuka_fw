@@ -1,0 +1,176 @@
+#!/bin/sh
+#
+# extio: JP5 header (EXT_IO) lines as named inputs and outputs.
+#
+# Each header pin is set by the u-boot environment variable extio_pinNN
+# (pin number, two digits), falling back to the defaults in /etc/extio.conf:
+#
+#   extio_pin21=out,ptt,0      direction,name,boot level (outputs)
+#   extio_pin05=in,pa_ready    inputs are read only
+#   extio_pin07=off            high impedance, not shown (also when unset)
+#
+# Edit through config.txt [EXTIO] on the USB drive, the Dashboard env editor
+# or fw_setenv, then run "extio apply" (done at boot by S24extio). Names start
+# with a letter and use letters, digits, _ and -.
+#
+#   extio apply             configure every pin from the settings
+#   extio list              pin, volts, direction, name, value
+#   extio get <name>        prints 0 or 1
+#   extio set <name> 0|1    outputs only
+#   extio has <name>        exit status 0 if <name> is a configured line
+#   extio dump              "name dir pin value" per configured line
+#   extio config            [EXTIO] lines for config.txt
+#   extio pins              header pin numbers
+#
+# Uses the libgpiod v1 tools (no GPIO sysfs). gpioget turns a line into an
+# input, so output levels are kept in $LEVELS rather than read back; the zynq
+# driver keeps an output's level after gpioset releases it.
+
+CONF=/etc/extio.conf
+RUN=/var/run/extio
+LEVELS=$RUN/level
+
+[ -r "$CONF" ] || { echo "extio: no $CONF" >&2; exit 1; }
+. "$CONF"
+: "${EXTIO_CHIP_LABEL:=zynq_gpio}"
+: "${EXTIO_EMIO_BASE:=54}"
+
+usage() {
+	echo "Usage: $0 {apply|list|get <name>|set <name> 0|1|has <name>|dump|config|pins}" >&2
+	exit 1
+}
+
+find_chip() {
+	gpiodetect 2>/dev/null | sed -n "s/^\(gpiochip[0-9]*\) \[$EXTIO_CHIP_LABEL\].*/\1/p" | head -n 1
+}
+
+# pin_setting <NN>: the environment value, else the default, else off
+pin_setting() {
+	v=$(fw_printenv -n "extio_pin$1" 2>/dev/null)
+	[ -n "$v" ] || eval "v=\${EXTIO_DEFAULT_pin$1:-off}"
+	echo "$v" | tr -d ' \t\r'
+}
+
+apply() {
+	chip=$(find_chip)
+	[ -n "$chip" ] || { echo "extio: no $EXTIO_CHIP_LABEL gpiochip" >&2; exit 1; }
+	rm -rf "$RUN"
+	mkdir -p "$LEVELS"
+	echo "$chip" > "$RUN/chip"
+	: > "$RUN/table"
+	names=" "
+	for p in $EXTIO_PINS; do
+		pin=${p%%:*}
+		rest=${p#*:}
+		off=$((EXTIO_EMIO_BASE + ${rest%%:*}))
+		s=$(pin_setting "$pin")
+		dir=$(echo "$s" | cut -d, -f1)
+		name=$(echo "$s" | cut -s -d, -f2)
+		level=$(echo "$s" | cut -s -d, -f3)
+		[ -n "$name" ] || name="jp5_pin$pin"
+		[ "$level" = 1 ] || level=0
+		case "$dir" in
+		in|out|off) ;;
+		*) logger -t extio "pin$pin: bad direction '$dir', left off"; dir=off ;;
+		esac
+		if [ "$dir" != off ]; then
+			if ! echo "$name" | grep -qE '^[A-Za-z][A-Za-z0-9_-]*$'; then
+				logger -t extio "pin$pin: bad name '$name', left off"; dir=off
+			fi
+			case "$names" in
+			*" $name "*) logger -t extio "pin$pin: name '$name' already used, left off"; dir=off ;;
+			esac
+		fi
+		if [ "$dir" = out ]; then
+			gpioset "$chip" "$off=$level" && echo "$level" > "$LEVELS/$name"
+		else
+			gpioget "$chip" "$off" > /dev/null
+		fi
+		[ "$dir" = off ] && continue
+		names="$names$name "
+		echo "$name $dir $pin $off" >> "$RUN/table"
+	done
+	logger -t extio "applied:$names"
+}
+
+# lookup <name>: sets L_DIR, L_PIN, L_OFF
+lookup() {
+	[ -r "$RUN/table" ] || return 1
+	set -- $(grep "^$1 " "$RUN/table")
+	[ $# -eq 4 ] || return 1
+	L_DIR=$2
+	L_PIN=$3
+	L_OFF=$4
+}
+
+get_value() {
+	lookup "$1" || { echo "extio: no line named '$1'" >&2; return 1; }
+	if [ "$L_DIR" = out ]; then
+		cat "$LEVELS/$1"
+	else
+		gpioget "$(cat "$RUN/chip")" "$L_OFF"
+	fi
+}
+
+set_value() {
+	lookup "$1" || { echo "extio: no line named '$1'" >&2; return 1; }
+	[ "$L_DIR" = out ] || { echo "extio: '$1' is an input" >&2; return 1; }
+	case "$2" in 0|1) ;; *) usage ;; esac
+	gpioset "$(cat "$RUN/chip")" "$L_OFF=$2" && echo "$2" > "$LEVELS/$1"
+}
+
+# dump: one gpioget for all inputs, output levels from $LEVELS
+dump() {
+	[ -s "$RUN/table" ] || return 0
+	ins=$(awk '$2 == "in" { printf "%s ", $4 }' "$RUN/table")
+	vals=""
+	[ -n "$ins" ] && vals=$(gpioget "$(cat "$RUN/chip")" $ins)
+	while read -r name dir pin off; do
+		if [ "$dir" = out ]; then
+			v=$(cat "$LEVELS/$name")
+		else
+			set -- $vals
+			v=$1
+			shift
+			vals="$*"
+		fi
+		echo "$name $dir $pin $v"
+	done < "$RUN/table"
+}
+
+list() {
+	printf "%-4s %-5s %-4s %-16s %s\n" PIN VOLTS DIR NAME VALUE
+	values=$(dump)
+	for p in $EXTIO_PINS; do
+		pin=${p%%:*}
+		volts=${p##*:}
+		line=$(echo "$values" | awk -v p="$pin" '$3 == p')
+		if [ -n "$line" ]; then
+			set -- $line
+			printf "%-4s %-5s %-4s %-16s %s\n" "$pin" "$volts" "$2" "$1" "$4"
+		else
+			printf "%-4s %-5s %-4s %-16s %s\n" "$pin" "$volts" off - -
+		fi
+	done
+}
+
+config() {
+	echo "# JP5 header: pinNN = in|out|off,name,level (boot level, outputs only)"
+	echo "# Pin 21 is 3.3 V, all other pins 1.8 V. Empty = board default."
+	echo "# Names: letter first, then letters, digits, _ or -. 'ptt' is keyed by TX."
+	for p in $EXTIO_PINS; do
+		echo "pin${p%%:*} = $(pin_setting "${p%%:*}")"
+	done
+}
+
+case "$1" in
+apply)  apply ;;
+list)   list ;;
+get)    [ -n "$2" ] || usage; get_value "$2" ;;
+set)    [ -n "$3" ] || usage; set_value "$2" "$3" ;;
+has)    [ -n "$2" ] || usage; lookup "$2" ;;
+dump)   dump ;;
+config) config ;;
+pins)   for p in $EXTIO_PINS; do echo "${p%%:*}"; done ;;
+*)      usage ;;
+esac

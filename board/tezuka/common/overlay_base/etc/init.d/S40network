@@ -212,6 +212,14 @@ create_system_files () {
 	printf "enable_ipv6 = %s%s\n" "$ENABLE_IPV6" "$CR" >> $CONF
 	printf "tx_power_save = %s%s\n" "$TX_POWER_SAVE" "$CR" >> $CONF
 	printf "%s\n" "$CR" >> $CONF
+	# Boards with a GPIO header managed by /usr/bin/extio (PlutoSky R2 JP5)
+	if [ -x /usr/bin/extio ]; then
+		printf "[EXTIO]%s\n" "$CR" >> $CONF
+		/usr/bin/extio config | while read -r line; do
+			printf "%s%s\n" "$line" "$CR"
+		done >> $CONF
+		printf "%s\n" "$CR" >> $CONF
+	fi
 	### /root/info.html — static USB-MSD info page, NOT the live Dashboard
 	### at /root/index.html (which has no #TOKEN# placeholders to replace) ###
 

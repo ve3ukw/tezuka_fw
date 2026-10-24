@@ -82,6 +82,7 @@ process_ini() {
 	ini_parser $FILE "SYSTEM"
 	ini_parser $FILE "USB_ETHERNET"
 	ini_parser $FILE "TEZUKA"
+	[ -x /usr/bin/extio ] && ini_parser $FILE "EXTIO"
 
 	rm -f /mnt/msd/SUCCESS_ENV_UPDATE /mnt/msd/FAILED_INVALID_UBOOT_ENV /mnt/msd/CAL_STATUS
 
@@ -119,6 +120,11 @@ process_ini() {
 		echo "disable_usb_console $disable_usb_console" >> /opt/fw_set.tmp
 		echo "enable_ipv6 $enable_ipv6" >> /opt/fw_set.tmp
 		echo "tx_power_save $tx_power_save" >> /opt/fw_set.tmp
+		if [ -x /usr/bin/extio ]; then
+			for pin in $(/usr/bin/extio pins); do
+				eval "echo \"extio_pin$pin \$pin$pin\"" >> /opt/fw_set.tmp
+			done
+		fi
 		fw_setenv -s /opt/fw_set.tmp
 		rm /opt/fw_set.tmp
 		flash_indication_off
@@ -129,8 +135,10 @@ process_ini() {
 		echo "Switching to rfoutput $rf_outputT" 
 		/root/switch_rfoutput.sh $rf_output
 		#Switch LNB
-		echo "Update lnb $lnb_power" 
+		echo "Update lnb $lnb_power"
 		/root/lnb_config.sh
+		#Reconfigure the GPIO header lines
+		[ -x /usr/bin/extio ] && /usr/bin/extio apply
 	else
 		touch /mnt/msd/FAILED_INVALID_UBOOT_ENV
 	fi

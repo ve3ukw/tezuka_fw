@@ -593,6 +593,19 @@ dump_data () {
     _led=$(basename "$_led_dir")
     publish "gpio/$_led" "$(led_state "$_led")"
   done
+
+  # GPIO header lines managed by /usr/bin/extio (PlutoSky R2 JP5): the value
+  # as gpio/<name> like the LEDs above, plus "<in|out>,<header pin>" as
+  # gpio_info/<name> so the Dashboard can mark inputs read-only.
+  if [ -x /usr/bin/extio ]; then
+    local _x_out _x_name _x_dir _x_pin _x_val
+    _x_out=$(/usr/bin/extio dump 2>/dev/null)
+    while read -r _x_name _x_dir _x_pin _x_val; do
+      [ -n "$_x_name" ] || continue
+      publish "gpio/$_x_name" "$_x_val"
+      publish "gpio_info/$_x_name" "$_x_dir,$_x_pin"
+    done <<< "$_x_out"
+  fi
 }
 
 do_sweep_stop () {
@@ -1060,6 +1073,13 @@ parse_cmd () {
     gpio/*)
       local led="${cmd#gpio/}"
       [[ "$led" =~ ^[A-Za-z0-9_:.-]+$ ]] || return
+      # A header line (extio): outputs only, extio refuses inputs
+      if [ -x /usr/bin/extio ] && /usr/bin/extio has "$led"; then
+        [ "$val" = "1" ] || val=0
+        /usr/bin/extio set "$led" "$val" 2>/dev/null
+        publish_force "gpio/$led" "$(/usr/bin/extio get "$led" 2>/dev/null)"
+        return
+      fi
       [ -d "/sys/class/leds/$led" ] || return
       if [ "$val" = "1" ]; then
         echo "$(read_file "/sys/class/leds/$led/max_brightness")" > "/sys/class/leds/$led/brightness" 2>/dev/null

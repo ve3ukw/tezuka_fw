@@ -1,0 +1,21 @@
+#!/bin/sh
+#
+# PlutoSky R2: JP5 header (EXT_IO) lines as named inputs and outputs, from
+# the extio_pinNN settings (config.txt [EXTIO]). See /usr/bin/extio.
+
+case "$1" in
+  start|restart|reload)
+	printf "Configuring JP5 header: "
+	/usr/bin/extio apply && echo "done"
+	;;
+  stop)
+	;;
+  status)
+	/usr/bin/extio list
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart|status}"
+	exit 1
+esac
+
+exit 0
