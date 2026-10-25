@@ -5,9 +5,9 @@
 # Each header pin is set by the u-boot environment variable extio_pinNN
 # (pin number, two digits), falling back to the defaults in /etc/extio.conf:
 #
-#   extio_pin21=out,ptt,0      direction,name,boot level (outputs)
+#   extio_pin03=out,ptt,0      direction,name,boot level (outputs)
 #   extio_pin05=in,pa_ready    inputs are read only
-#   extio_pin07=off            high impedance, not shown (also when unset)
+#   extio_pin07=off            not driven, not shown (also when unset)
 #
 # Edit through config.txt [EXTIO] on the USB drive, the Dashboard env editor
 # or fw_setenv, then run "extio apply" (done at boot by S24extio). Names start
@@ -157,6 +157,8 @@ list() {
 config() {
 	echo "# JP5 header: pinNN = in|out|off,name,level (boot level, outputs only)"
 	echo "# Pin 21 is 3.3 V, all other pins 1.8 V. Empty = board default."
+	echo "# Pin 21 jumpered to pin 23 selects the 40 MHz clock: out,clk_sel,1"
+	echo "# (1 = onboard, 0 = external). Otherwise leave pin 21 off."
 	echo "# Names: letter first, then letters, digits, _ or -. 'ptt' is keyed by TX."
 	for p in $EXTIO_PINS; do
 		echo "pin${p%%:*} = $(pin_setting "${p%%:*}")"
