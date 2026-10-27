@@ -238,6 +238,61 @@ publish_force () {
   serial_publish "$1" "$2"
 }
 
+# ============================================================
+#  GPIO HEADER LINES (/usr/bin/extio, PlutoSky R2 JP5)
+# ============================================================
+# "extio apply" (boot, config change) writes the line table to $XT_RUN. It
+# is read here with shell builtins and reloaded only when it changes, so a
+# cmd/gpio costs one gpioset and the 2 s poll starts no process for
+# outputs; under heavy IQ streaming every fork costs tens of ms. Output
+# levels are kept in $XT_RUN/level/<name>, shared with the extio command
+# and watchconsoletx.sh.
+XT_RUN=/var/run/extio
+declare -A XT_DIR XT_OFFS XT_PINS XT_SEEN
+XT_NAMES=()
+XT_CHIP=""
+XT_PID=""
+
+# Returns 1 when there are no header lines on this board
+extio_load () {
+  [ -x /usr/bin/extio ] && [ -r "$XT_RUN/table" ] || return 1
+  local stamp="/var/run/extio_api.$BASHPID" name dir pin off
+  # each process (poll loop, command subshell) keeps its own copy
+  if [ "$XT_PID" = "$BASHPID" ] && [ -e "$stamp" ] && ! [ "$XT_RUN/table" -nt "$stamp" ]; then
+    return 0
+  fi
+  : > "$stamp"
+  XT_PID=$BASHPID
+  XT_DIR=(); XT_OFFS=(); XT_PINS=(); XT_NAMES=()
+  read -r XT_CHIP < "$XT_RUN/chip"
+  # "name dir pin offset"; outputs sharing a name form one group
+  while read -r name dir pin off; do
+    [ -n "$name" ] || continue
+    if [ -z "${XT_DIR[$name]}" ]; then
+      XT_NAMES+=("$name")
+      XT_DIR[$name]=$dir; XT_OFFS[$name]=$off; XT_PINS[$name]=$pin
+    else
+      XT_OFFS[$name]+=" $off"; XT_PINS[$name]+="+$pin"
+    fi
+  done < "$XT_RUN/table"
+  return 0
+}
+
+# Every state message is retained, so a line that was renamed or turned off
+# would stay on the broker (and the Dashboard) forever: publish an empty
+# retained message for it, which deletes it. Once at startup for anything
+# left from before, then from the poll as names disappear.
+extio_clear_retained () {
+  extio_load || return
+  local topic payload name
+  while read -r topic payload; do
+    name=${topic#state/gpio_info/}
+    [ -n "$name" ] && [ -z "${XT_DIR[$name]}" ] || continue
+    publish_force "gpio/$name" ""
+    publish_force "gpio_info/$name" ""
+  done < <(timeout 3 /usr/bin/mosquitto_sub -i "tezuka_xtclr" -v -t 'state/gpio_info/#' --retained-only -W 1 2>/dev/null)
+}
+
 read_file () {
   if [ -r "$1" ]; then
     echo "$(<"$1")"
@@ -595,16 +650,34 @@ dump_data () {
   done
 
   # GPIO header lines managed by /usr/bin/extio (PlutoSky R2 JP5): the value
-  # as gpio/<name> like the LEDs above, plus "<in|out>,<header pin>" as
-  # gpio_info/<name> so the Dashboard can mark inputs read-only.
-  if [ -x /usr/bin/extio ]; then
-    local _x_out _x_name _x_dir _x_pin _x_val
-    _x_out=$(/usr/bin/extio dump 2>/dev/null)
-    while read -r _x_name _x_dir _x_pin _x_val; do
-      [ -n "$_x_name" ] || continue
-      publish "gpio/$_x_name" "$_x_val"
-      publish "gpio_info/$_x_name" "$_x_dir,$_x_pin"
-    done <<< "$_x_out"
+  # as gpio/<name> like the LEDs above, plus "<in|out>,<header pins>" as
+  # gpio_info/<name> so the Dashboard can mark inputs read-only. Outputs
+  # come from the level files; all inputs are read with one gpioget.
+  if extio_load; then
+    local _x_name _x_v _x_ins="" _x_i=0
+    local -a _x_vals=()
+    for _x_name in "${XT_NAMES[@]}"; do
+      [ "${XT_DIR[$_x_name]}" = in ] && _x_ins+=" ${XT_OFFS[$_x_name]}"
+    done
+    [ -n "$_x_ins" ] && read -ra _x_vals <<< "$(gpioget "$XT_CHIP" $_x_ins 2>/dev/null)"
+    for _x_name in "${XT_NAMES[@]}"; do
+      if [ "${XT_DIR[$_x_name]}" = out ]; then
+        _x_v=""
+        read -r _x_v 2>/dev/null < "$XT_RUN/level/$_x_name"
+      else
+        _x_v=${_x_vals[_x_i]}
+        _x_i=$((_x_i + 1))
+      fi
+      publish "gpio/$_x_name" "$_x_v"
+      publish "gpio_info/$_x_name" "${XT_DIR[$_x_name]},${XT_PINS[$_x_name]}"
+      XT_SEEN[$_x_name]=1
+    done
+    for _x_name in "${!XT_SEEN[@]}"; do
+      [ -n "${XT_DIR[$_x_name]}" ] && continue
+      publish_force "gpio/$_x_name" ""
+      publish_force "gpio_info/$_x_name" ""
+      unset "XT_SEEN[$_x_name]"
+    done
   fi
 }
 
@@ -1073,11 +1146,19 @@ parse_cmd () {
     gpio/*)
       local led="${cmd#gpio/}"
       [[ "$led" =~ ^[A-Za-z0-9_:.-]+$ ]] || return
-      # A header line (extio): outputs only, extio refuses inputs
-      if [ -x /usr/bin/extio ] && /usr/bin/extio has "$led"; then
+      # A header line (extio): one gpioset for the line or its group,
+      # inputs are read only
+      if extio_load && [ -n "${XT_DIR[$led]}" ]; then
+        [ "${XT_DIR[$led]}" = out ] || return
         [ "$val" = "1" ] || val=0
-        /usr/bin/extio set "$led" "$val" 2>/dev/null
-        publish_force "gpio/$led" "$(/usr/bin/extio get "$led" 2>/dev/null)"
+        local _o _v=""
+        local -a _a=()
+        for _o in ${XT_OFFS[$led]}; do
+          _a+=("$_o=$val")
+        done
+        gpioset "$XT_CHIP" "${_a[@]}" 2>/dev/null && echo "$val" > "$XT_RUN/level/$led"
+        read -r _v 2>/dev/null < "$XT_RUN/level/$led"
+        publish_force "gpio/$led" "$_v"
         return
       fi
       [ -d "/sys/class/leds/$led" ] || return
@@ -1218,6 +1299,8 @@ GPS_TICK=0
 # ============================================================
 #  MAIN LOOP
 # ============================================================
+
+extio_clear_retained
 
 # Subscribe to commands — reconnects automatically on broker disconnect
 (

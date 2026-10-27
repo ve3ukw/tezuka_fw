@@ -20,11 +20,20 @@ function applyMqtt(prev, path, raw) {
   }
   if (path.startsWith('gpio/')) {
     const pin = path.slice(5);
+    if (raw === '') {
+      // empty retained message: the line was renamed or turned off
+      const { [pin]: _gone, ...gpio } = prev.gpio;
+      return { ...prev, gpio };
+    }
     return { ...prev, gpio: { ...prev.gpio, [pin]: raw === '1' } };
   }
   if (path.startsWith('gpio_info/')) {
-    // "<in|out>,<header pin>" for GPIO header lines (extio), absent for LEDs
+    // "<in|out>,<header pins>" for GPIO header lines (extio), absent for LEDs
     const name = path.slice(10);
+    if (raw === '') {
+      const { [name]: _gone, ...gpioInfo } = prev.gpioInfo || {};
+      return { ...prev, gpioInfo };
+    }
     const [dir, pin] = raw.split(',');
     return { ...prev, gpioInfo: { ...prev.gpioInfo, [name]: { dir, pin } } };
   }

@@ -4,14 +4,22 @@
 adphys="$(cat /sys/bus/iio/devices/iio:device0/name)"
 tx_power_save=$(fw_printenv -n tx_power_save)
 
-# PTT output: the "ptt" LED where the board's device tree has one, else a
-# GPIO header line named ptt (/usr/bin/extio, PlutoSky R2 JP5)
+# PTT output: the "ptt" LED where the board's device tree has one, else the
+# GPIO header line(s) named ptt in the extio table (PlutoSky R2 JP5), set
+# with one gpioset and recorded in extio's level file
+EXTIO_RUN=/var/run/extio
 ptt_set()
 {
     if [ -e /sys/class/leds/ptt/brightness ]; then
         echo $1 > /sys/class/leds/ptt/brightness
-    elif [ -x /usr/bin/extio ]; then
-        /usr/bin/extio set ptt $1 2>/dev/null
+    elif [ -r $EXTIO_RUN/table ]; then
+        args=""
+        while read -r name dir pin off; do
+            [ "$name" = ptt ] && [ "$dir" = out ] && args="$args $off=$1"
+        done < $EXTIO_RUN/table
+        [ -n "$args" ] || return
+        read -r chip < $EXTIO_RUN/chip
+        gpioset "$chip" $args && echo $1 > $EXTIO_RUN/level/ptt
     fi
 }
 
@@ -143,21 +151,37 @@ fi
 #echo out > /sys/class/gpio/gpio906/direction
 
 pttoff
+PTT_STATE=0
+REFRESH=0
 
 # Initialize the history variable before starting the loop
-LAST_COUNT=$(grep "7c42" /proc/interrupts | awk '{print $2 + $3}')
+LAST_COUNT=$(awk '/7c42/ { print $2 + $3; exit }' /proc/interrupts)
 
 check_tx_flux() {
   # Get the current absolute count immediately
-    CURRENT_COUNT=$(grep "7c42" /proc/interrupts | awk '{print $2 + $3}')
-    
+    CURRENT_COUNT=$(awk '/7c42/ { print $2 + $3; exit }' /proc/interrupts)
+
     # Compare it directly to the previous loop's count
     DELTA=$((CURRENT_COUNT - LAST_COUNT))
-    
+
     # Save the current count as history for the NEXT loop execution
     LAST_COUNT=$CURRENT_COUNT
 
     if [ "$DELTA" -gt 0 ]; then
+        STATE=1
+    else
+        STATE=0
+    fi
+
+    # Switch only on a change (each switch forks several processes, slow
+    # under heavy IQ streaming), and re-assert every 10 s in case something
+    # else changed the register or the PTT line
+    REFRESH=$((REFRESH + 1))
+    [ "$STATE" = "$PTT_STATE" ] && [ "$REFRESH" -lt 10 ] && return
+    REFRESH=0
+    PTT_STATE=$STATE
+
+    if [ "$STATE" = 1 ]; then
         ptton
     else
         pttoff
