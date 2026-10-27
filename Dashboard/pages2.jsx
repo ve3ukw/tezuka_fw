@@ -2516,7 +2516,7 @@ function GPIO({ d }) {
     if (rank(a) !== rank(b)) return rank(a) - rank(b);
     const ma = /^led(\d+):/i.exec(a), mb = /^led(\d+):/i.exec(b);
     if (ma && mb) return +ma[1] - +mb[1];
-    if (info[a] && info[b]) return +info[a].pin - +info[b].pin;
+    if (info[a] && info[b]) return parseInt(info[a].pin, 10) - parseInt(info[b].pin, 10);
     return a.localeCompare(b);
   });
   const isInput = (pin) => info[pin] && info[pin].dir === 'in';
@@ -2535,7 +2535,9 @@ function GPIO({ d }) {
                 const on = gpio[pin];
                 const { label, color } = describeGpioLed(pin);
                 const input = isInput(pin);
-                const title = info[pin] ? `${pin} · header pin ${+info[pin].pin} · ${input ? 'input (read only)' : 'output'}` : pin;
+                // A name shared by several outputs carries its pins joined by "+"
+                const hdr = info[pin] ? String(info[pin].pin || '').split('+').map((p) => +p) : [];
+                const title = info[pin] ? `${pin} · header pin${hdr.length > 1 ? 's' : ''} ${hdr.join(', ')} · ${input ? 'input (read only)' : 'output'}` : pin;
                 return (
                   <div key={pin} className={`gpio-pin ${on ? "gpio-on" : "gpio-off"}${input ? " gpio-input" : ""}`} onClick={() => toggle(pin)} title={title}>
                     <span className="gpio-num">{label}</span>

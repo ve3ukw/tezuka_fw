@@ -5,20 +5,22 @@
 # Each header pin is set by the u-boot environment variable extio_pinNN
 # (pin number, two digits), falling back to the defaults in /etc/extio.conf:
 #
-#   extio_pin03=out,ptt,0      direction,name,boot level (outputs)
+#   extio_pin03=out,relay,0    direction,name,boot level (outputs)
 #   extio_pin05=in,pa_ready    inputs are read only
 #   extio_pin07=off            not driven, not shown (also when unset)
 #
 # Edit through config.txt [EXTIO] on the USB drive, the Dashboard env editor
 # or fw_setenv, then run "extio apply" (done at boot by S24extio). Names start
-# with a letter and use letters, digits, _ and -.
+# with a letter and use letters, digits, _ and -. Several outputs may share a
+# name: they switch together (one gpioset call) and take the boot level of
+# the first of them. Each must drive its own load; never tie pins together.
 #
 #   extio apply             configure every pin from the settings
 #   extio list              pin, volts, direction, name, value
 #   extio get <name>        prints 0 or 1
 #   extio set <name> 0|1    outputs only
 #   extio has <name>        exit status 0 if <name> is a configured line
-#   extio dump              "name dir pin value" per configured line
+#   extio dump              "name dir pins value" per name, pins joined by +
 #   extio config            [EXTIO] lines for config.txt
 #   extio pins              header pin numbers
 #
@@ -58,7 +60,6 @@ apply() {
 	mkdir -p "$LEVELS"
 	echo "$chip" > "$RUN/chip"
 	: > "$RUN/table"
-	names=" "
 	for p in $EXTIO_PINS; do
 		pin=${p%%:*}
 		rest=${p#*:}
@@ -77,9 +78,16 @@ apply() {
 			if ! echo "$name" | grep -qE '^[A-Za-z][A-Za-z0-9_-]*$'; then
 				logger -t extio "pin$pin: bad name '$name', left off"; dir=off
 			fi
-			case "$names" in
-			*" $name "*) logger -t extio "pin$pin: name '$name' already used, left off"; dir=off ;;
-			esac
+			# only outputs may share a name; a group follows its first pin's level
+			prev=$(awk -v n="$name" '$1 == n { print $2; exit }' "$RUN/table")
+			if [ -n "$prev" ]; then
+				if [ "$dir" = in ] || [ "$prev" = in ]; then
+					logger -t extio "pin$pin: name '$name' already used (only outputs can share a name), left off"
+					dir=off
+				else
+					level=$(cat "$LEVELS/$name")
+				fi
+			fi
 		fi
 		if [ "$dir" = out ]; then
 			gpioset "$chip" "$off=$level" && echo "$level" > "$LEVELS/$name"
@@ -87,20 +95,17 @@ apply() {
 			gpioget "$chip" "$off" > /dev/null
 		fi
 		[ "$dir" = off ] && continue
-		names="$names$name "
 		echo "$name $dir $pin $off" >> "$RUN/table"
 	done
-	logger -t extio "applied:$names"
+	logger -t extio "applied: $(awk '!seen[$1]++ { printf "%s ", $1 }' "$RUN/table")"
 }
 
-# lookup <name>: sets L_DIR, L_PIN, L_OFF
+# lookup <name>: sets L_DIR and L_OFFS (every line offset with that name)
 lookup() {
 	[ -r "$RUN/table" ] || return 1
-	set -- $(grep "^$1 " "$RUN/table")
-	[ $# -eq 4 ] || return 1
-	L_DIR=$2
-	L_PIN=$3
-	L_OFF=$4
+	L_OFFS=$(awk -v n="$1" '$1 == n { printf "%s ", $4 }' "$RUN/table")
+	[ -n "$L_OFFS" ] || return 1
+	L_DIR=$(awk -v n="$1" '$1 == n { print $2; exit }' "$RUN/table")
 }
 
 get_value() {
@@ -108,7 +113,7 @@ get_value() {
 	if [ "$L_DIR" = out ]; then
 		cat "$LEVELS/$1"
 	else
-		gpioget "$(cat "$RUN/chip")" "$L_OFF"
+		gpioget "$(cat "$RUN/chip")" $L_OFFS
 	fi
 }
 
@@ -116,16 +121,24 @@ set_value() {
 	lookup "$1" || { echo "extio: no line named '$1'" >&2; return 1; }
 	[ "$L_DIR" = out ] || { echo "extio: '$1' is an input" >&2; return 1; }
 	case "$2" in 0|1) ;; *) usage ;; esac
-	gpioset "$(cat "$RUN/chip")" "$L_OFF=$2" && echo "$2" > "$LEVELS/$1"
+	args=""
+	for o in $L_OFFS; do
+		args="$args $o=$2"
+	done
+	gpioset "$(cat "$RUN/chip")" $args && echo "$2" > "$LEVELS/$1"
 }
 
-# dump: one gpioget for all inputs, output levels from $LEVELS
+# dump: one line per name (pins of a group joined by +), one gpioget for all
+# inputs, output levels from $LEVELS
 dump() {
 	[ -s "$RUN/table" ] || return 0
 	ins=$(awk '$2 == "in" { printf "%s ", $4 }' "$RUN/table")
 	vals=""
 	[ -n "$ins" ] && vals=$(gpioget "$(cat "$RUN/chip")" $ins)
-	while read -r name dir pin off; do
+	awk '{ if (!($1 in pins)) { order[n++] = $1; dir[$1] = $2; pins[$1] = $3 }
+	       else pins[$1] = pins[$1] "+" $3 }
+	     END { for (i = 0; i < n; i++) print order[i], dir[order[i]], pins[order[i]] }' "$RUN/table" |
+	while read -r name dir pins; do
 		if [ "$dir" = out ]; then
 			v=$(cat "$LEVELS/$name")
 		else
@@ -134,8 +147,8 @@ dump() {
 			shift
 			vals="$*"
 		fi
-		echo "$name $dir $pin $v"
-	done < "$RUN/table"
+		echo "$name $dir $pins $v"
+	done
 }
 
 list() {
@@ -144,7 +157,7 @@ list() {
 	for p in $EXTIO_PINS; do
 		pin=${p%%:*}
 		volts=${p##*:}
-		line=$(echo "$values" | awk -v p="$pin" '$3 == p')
+		line=$(echo "$values" | awk -v p="$pin" '{ n = split($3, a, "+"); for (i = 1; i <= n; i++) if (a[i] == p) print }')
 		if [ -n "$line" ]; then
 			set -- $line
 			printf "%-4s %-5s %-4s %-16s %s\n" "$pin" "$volts" "$2" "$1" "$4"
@@ -156,10 +169,12 @@ list() {
 
 config() {
 	echo "# JP5 header: pinNN = in|out|off,name,level (boot level, outputs only)"
-	echo "# Pin 21 is 3.3 V, all other pins 1.8 V. Empty = board default."
+	echo "# Pin 21 is 3.3 V, all other pins 1.8 V. Empty = off."
 	echo "# Pin 21 jumpered to pin 23 selects the 40 MHz clock: out,clk_sel,1"
 	echo "# (1 = onboard, 0 = external). Otherwise leave pin 21 off."
-	echo "# Names: letter first, then letters, digits, _ or -. 'ptt' is keyed by TX."
+	echo "# Names: letter first, then letters, digits, _ or -. A line named 'ptt'"
+	echo "# follows Tezuka's TX detection (1 s polling, not for timing-critical keying)."
+	echo "# Outputs sharing a name switch together (each to its own load, never tie pins)."
 	for p in $EXTIO_PINS; do
 		echo "pin${p%%:*} = $(pin_setting "${p%%:*}")"
 	done
